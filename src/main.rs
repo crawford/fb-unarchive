@@ -16,7 +16,7 @@ struct Options {
     #[structopt(short, long)]
     dry_run: bool,
 
-    #[structopt(short, long, default_value = "./photos_and_videos", parse(from_os_str))]
+    #[structopt(short, long, default_value = ".", parse(from_os_str))]
     input: PathBuf,
 
     #[structopt(short, long, default_value = "./out", parse(from_os_str))]
@@ -75,10 +75,10 @@ fn main() -> Result<()> {
         structopt::clap::crate_version!()
     );
 
-    let albums = read_albums(&opts.input.join("album"))?;
+    let albums = read_albums(&opts.input.join("photos_and_videos").join("album"))?;
     trace!("Albums: {:#?}", albums);
 
-    process_albums(albums, &opts.output)?;
+    process_albums(&opts, albums)?;
 
     Ok(())
 }
@@ -101,14 +101,22 @@ fn read_albums(dir: &Path) -> Result<Vec<Album>> {
     Ok(albums)
 }
 
-fn process_albums<A: IntoIterator<Item = Album>>(albums: A, out_dir: &Path) -> Result<()> {
+fn process_albums<A: IntoIterator<Item = Album>>(opts: &Options, albums: A) -> Result<()> {
     debug!("Processing albums");
 
     for album in albums {
-        let album_dir = out_dir.join(album.name);
-        fs::create_dir_all(&album_dir)?;
+        let album_dir = opts.output.join(album.name);
+        if !opts.dry_run {
+            fs::create_dir_all(&album_dir)?;
+        }
 
         for photo in album.photos {
+            let path = opts.input.join(&photo.path);
+            let mut jpeg = Jpeg::read(&mut BufReader::new(
+                File::open(&path).context(format!("Failed to open {}", path.display()))?,
+            ))
+            .map_err(|e| anyhow!("Failed to parse {}: {}", path.display(), e))?;
+
             let description = photo.description.into_iter();
             let comments = photo.comments.into_iter().filter_map(|c| {
                 c.comment.as_ref().map(|comment| {
@@ -121,9 +129,6 @@ fn process_albums<A: IntoIterator<Item = Album>>(albums: A, out_dir: &Path) -> R
                 })
             });
             let combined = description.chain(comments).collect::<Vec<_>>().join("\n");
-
-            let mut jpeg = Jpeg::read(&mut BufReader::new(File::open(&photo.path)?))
-                .map_err(|e| anyhow!("{}", e))?;
 
             let exif = exif::Exif {
                 ifds: vec![exif::Ifd {
@@ -155,8 +160,10 @@ fn process_albums<A: IntoIterator<Item = Album>>(albums: A, out_dir: &Path) -> R
                     .file_name()
                     .ok_or_else(|| anyhow!("missing filename"))?,
             );
-            trace!("Outputting {}", out_path.display());
-            jpeg.write_to(&mut BufWriter::new(File::create(out_path)?))?;
+            if !opts.dry_run {
+                trace!("Outputting {}", out_path.display());
+                jpeg.write_to(&mut BufWriter::new(File::create(out_path)?))?;
+            }
         }
     }
 
