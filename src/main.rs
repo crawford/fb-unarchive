@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use chrono::naive::NaiveDateTime;
 use imagemeta::exif;
 use img_parts::{jpeg::Jpeg, ImageEXIF};
-use log::{debug, info, trace, LevelFilter};
+use log::{debug, info, trace, warn, LevelFilter};
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Cursor};
 use std::path::{Path, PathBuf};
@@ -21,6 +21,12 @@ struct Options {
 
     #[structopt(short, long, default_value = "./out", parse(from_os_str))]
     output: PathBuf,
+
+    #[structopt(long)]
+    skip_photos: bool,
+
+    #[structopt(long)]
+    skip_videos: bool,
 
     #[structopt(short, long, parse(from_occurrences))]
     verbosity: u8,
@@ -57,7 +63,7 @@ struct Comment {
 }
 
 fn main() -> Result<()> {
-    let opts = Options::from_args();
+    let mut opts = Options::from_args();
 
     env_logger::Builder::from_default_env()
         .filter_level(match opts.verbosity {
@@ -74,6 +80,11 @@ fn main() -> Result<()> {
         structopt::clap::crate_name!(),
         structopt::clap::crate_version!()
     );
+
+    if !opts.skip_videos {
+        info!("Processing videos isn't implemented yet; skipping them");
+        opts.skip_videos = true;
+    }
 
     let albums = read_albums(&opts.input.join("photos_and_videos").join("album"))?;
     trace!("Albums: {:#?}", albums);
@@ -112,6 +123,30 @@ fn process_albums<A: IntoIterator<Item = Album>>(opts: &Options, albums: A) -> R
 
         for photo in album.photos {
             let path = opts.input.join(&photo.path);
+            match path.extension().and_then(|x| x.to_str()) {
+                Some("jpg") => {
+                    if opts.skip_photos {
+                        trace!("Skipping photo {}", path.display());
+                        continue;
+                    }
+                }
+                Some("mp4") => {
+                    if opts.skip_videos {
+                        trace!("Skipping video {}", path.display());
+                        continue;
+                    }
+                }
+                ext => {
+                    warn!(
+                        "Unrecognized file extension {}; skipping {}",
+                        ext.map(|e| format!(r#""{}""#, e))
+                            .unwrap_or_else(|| "(none)".into()),
+                        path.display()
+                    );
+                    continue;
+                }
+            }
+
             let mut jpeg = Jpeg::read(&mut BufReader::new(
                 File::open(&path).context(format!("Failed to open {}", path.display()))?,
             ))
