@@ -1,0 +1,60 @@
+name: Release
+on:
+  push:
+    tags: [ 'v*' ]
+
+jobs:
+  create:
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.release.outputs.upload_url }}
+    steps:
+      - uses: actions/create-release@v1
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: ${{ github.ref }}
+          draft: false
+          prerelease: false
+
+  build:
+    needs: [ create ]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest ]
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - os: macos-latest
+            target: x86_64-apple-darwin
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt
+          target: ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+      - name: Package
+        id: package
+        run: |
+          ARCHIVE_DIR=fb-unarchive-$(basename $GITHUB_REF)
+          ARCHIVE=$ARCHIVE_DIR-${{ matrix.target }}.tar.gz
+          echo "::set-output name=archive::${ARCHIVE}"
+          mkdir $ARCHIVE_DIR
+          cp target/${{ matrix.target }}/release/fb-unarchive $ARCHIVE_DIR
+          tar --auto-compress --create --file $ARCHIVE $ARCHIVE_DIR
+      - uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create.outputs.upload_url }}
+          asset_path: ${{ steps.package.outputs.archive}}
+          asset_name: ${{ steps.package.outputs.archive}}
+          asset_content_type: application/tar+gzip
+
