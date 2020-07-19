@@ -149,8 +149,12 @@ fn process_albums<A: IntoIterator<Item = Album>>(albums: A, out_dir: &Path) -> R
             exif.encode(&mut raw_exif).map_err(|e| anyhow!("{}", e))?;
             jpeg.set_exif(Some(raw_exif.into_inner()));
 
-            let out_path =
-                album_dir.join(photo.path.file_name().ok_or(anyhow!("missing filename"))?);
+            let out_path = album_dir.join(
+                photo
+                    .path
+                    .file_name()
+                    .ok_or_else(|| anyhow!("missing filename"))?,
+            );
             trace!("Outputting {}", out_path.display());
             jpeg.write_to(&mut BufWriter::new(File::create(out_path)?))?;
         }
