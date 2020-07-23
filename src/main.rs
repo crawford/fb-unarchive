@@ -121,7 +121,7 @@ fn read_albums(root: &Path) -> Result<Vec<Album>> {
         }
 
         trace!("Adding {}", path.display());
-        let mut album: Album = serde_json::from_reader(File::open(path)?)?;
+        let mut album: Album = serde_json::from_reader(&mut BufReader::new(File::open(path)?))?;
         for item in album.items.iter_mut() {
             item.path = root.join(&item.path);
         }
