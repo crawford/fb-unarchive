@@ -100,7 +100,7 @@ fn main() -> Result<()> {
         opts.skip_videos = true;
     }
 
-    let albums = read_albums(&opts.input.join("photos_and_videos").join("album"))?;
+    let albums = read_albums(&opts.input)?;
     trace!("Albums: {:#?}", albums);
 
     process_albums(&opts, albums)?;
@@ -108,11 +108,12 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn read_albums(dir: &Path) -> Result<Vec<Album>> {
+fn read_albums(root: &Path) -> Result<Vec<Album>> {
     debug!("Finding albums");
 
     let mut albums = Vec::new();
-    for entry in fs::read_dir(dir).context(format!("Unable to list albums ({})", dir.display()))? {
+    let dir = root.join("photos_and_videos").join("album");
+    for entry in fs::read_dir(&dir).context(format!("Unable to list albums ({})", dir.display()))? {
         let path = entry?.path();
         if path.extension().and_then(|x| x.to_str()) != Some("json") {
             trace!("Skipping {}", path.display());
@@ -120,7 +121,11 @@ fn read_albums(dir: &Path) -> Result<Vec<Album>> {
         }
 
         trace!("Adding {}", path.display());
-        albums.push(serde_json::from_reader(File::open(path)?)?);
+        let mut album: Album = serde_json::from_reader(File::open(path)?)?;
+        for item in album.items.iter_mut() {
+            item.path = root.join(&item.path);
+        }
+        albums.push(album);
     }
 
     Ok(albums)
@@ -136,83 +141,93 @@ fn process_albums<A: IntoIterator<Item = Album>>(opts: &Options, albums: A) -> R
         }
 
         for item in album.items {
-            let path = opts.input.join(&item.path);
-            match path.extension().and_then(|x| x.to_str()) {
-                Some("jpg") => {
-                    if opts.skip_photos {
-                        trace!("Skipping photo {}", path.display());
-                        continue;
-                    }
-                }
-                Some("mp4") => {
-                    if opts.skip_videos {
-                        trace!("Skipping video {}", path.display());
-                        continue;
-                    }
-                }
-                ext => {
+            match item.path.extension().and_then(|x| x.to_str()) {
+                Some("jpg") => process_jpeg(&item, &album_dir, opts)?,
+                Some("mp4") => process_mp4(&item, &album_dir, opts)?,
+                Some(ext) => {
                     warn!(
-                        "Unrecognized file extension {}; skipping {}",
-                        ext.map(|e| format!(r#""{}""#, e))
-                            .unwrap_or_else(|| "(none)".into()),
-                        path.display()
+                        r#"Unrecognized file extension "{}"; skipping {}"#,
+                        ext,
+                        item.path.display()
                     );
                     continue;
                 }
-            }
-
-            let mut jpeg = Jpeg::read(&mut BufReader::new(
-                File::open(&path).context(format!("Failed to open {}", path.display()))?,
-            ))
-            .map_err(|e| anyhow!("Failed to parse {}: {}", path.display(), e))?;
-
-            let description = item.description.into_iter();
-            let comments = item.comments.into_iter().filter_map(|c| {
-                c.comment.as_ref().map(|comment| {
-                    format!(
-                        r#""{}" -{} ({})"#,
-                        comment,
-                        c.author,
-                        c.timestamp.format("%F %r")
-                    )
-                })
-            });
-            let combined = description.chain(comments).collect::<Vec<_>>().join("\n");
-
-            let exif = exif::Exif {
-                ifds: vec![exif::Ifd {
-                    id: 0,
-                    entries: vec![
-                        exif::Entry {
-                            tag: rexif::ExifTag::ImageDescription as u16,
-                            data: exif::EntryData::Ascii(combined),
-                        },
-                        exif::Entry {
-                            tag: rexif::ExifTag::DateTime as u16,
-                            data: exif::EntryData::Ascii(
-                                item.timestamp.format("%Y:%m:%d %H:%M:%S").to_string(),
-                            ),
-                        },
-                    ],
-                    children: Vec::new(),
-                }],
-            };
-
-            trace!("Writing metadata for {}: {:#?}", item.path.display(), exif);
-            let mut raw_exif = Cursor::new(Vec::new());
-            exif.encode(&mut raw_exif).map_err(|e| anyhow!("{}", e))?;
-            jpeg.set_exif(Some(raw_exif.into_inner()));
-
-            let out_path = album_dir.join(
-                item.path
-                    .file_name()
-                    .ok_or_else(|| anyhow!("missing filename"))?,
-            );
-            if !opts.dry_run {
-                trace!("Outputting {}", out_path.display());
-                jpeg.write_to(&mut BufWriter::new(File::create(out_path)?))?;
+                None => {
+                    warn!(r"Missing file extension; skipping {}", item.path.display());
+                    continue;
+                }
             }
         }
+    }
+
+    Ok(())
+}
+
+fn process_jpeg(item: &Item, dir: &Path, opts: &Options) -> Result<()> {
+    if opts.skip_photos {
+        trace!("Skipping photo {}", item.path.display());
+        return Ok(());
+    }
+
+    let mut jpeg = Jpeg::read(&mut BufReader::new(
+        File::open(&item.path).context(format!("Failed to open {}", item.path.display()))?,
+    ))
+    .map_err(|e| anyhow!("Failed to parse {}: {}", item.path.display(), e))?;
+
+    let description = item.description.clone().into_iter();
+    let comments = item.comments.iter().filter_map(|c| {
+        c.comment.as_ref().map(|comment| {
+            format!(
+                r#""{}" -{} ({})"#,
+                comment,
+                c.author,
+                c.timestamp.format("%F %r")
+            )
+        })
+    });
+    let combined = description.chain(comments).collect::<Vec<_>>().join("\n");
+
+    let exif = exif::Exif {
+        ifds: vec![exif::Ifd {
+            id: 0,
+            entries: vec![
+                exif::Entry {
+                    tag: rexif::ExifTag::ImageDescription as u16,
+                    data: exif::EntryData::Ascii(combined),
+                },
+                exif::Entry {
+                    tag: rexif::ExifTag::DateTime as u16,
+                    data: exif::EntryData::Ascii(
+                        item.timestamp.format("%Y:%m:%d %H:%M:%S").to_string(),
+                    ),
+                },
+            ],
+            children: Vec::new(),
+        }],
+    };
+
+    trace!("Writing metadata for {}: {:#?}", item.path.display(), exif);
+    let mut raw_exif = Cursor::new(Vec::new());
+    exif.encode(&mut raw_exif).map_err(|e| anyhow!("{}", e))?;
+    jpeg.set_exif(Some(raw_exif.into_inner()));
+
+    let out_path = dir.join(
+        item.path
+            .file_name()
+            .ok_or_else(|| anyhow!("missing filename"))?,
+    );
+    if !opts.dry_run {
+        trace!("Outputting {}", out_path.display());
+        jpeg.write_to(&mut BufWriter::new(File::create(out_path)?))?;
+    }
+
+    Ok(())
+}
+
+fn process_mp4(item: &Item, _dir: &Path, opts: &Options) -> Result<()> {
+    if opts.skip_videos {
+        trace!("Skipping video {}", item.path.display());
+        return Ok(());
     }
 
     Ok(())
