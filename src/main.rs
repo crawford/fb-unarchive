@@ -50,12 +50,12 @@ struct Options {
 struct Album {
     name: String,
     description: Option<String>,
-    #[serde(default = "Vec::new")]
-    photos: Vec<Photo>,
+    #[serde(default = "Vec::new", rename = "photos")]
+    items: Vec<Item>,
 }
 
 #[derive(serde::Deserialize, Debug)]
-struct Photo {
+struct Item {
     #[serde(
         with = "chrono::naive::serde::ts_seconds",
         rename = "creation_timestamp"
@@ -135,8 +135,8 @@ fn process_albums<A: IntoIterator<Item = Album>>(opts: &Options, albums: A) -> R
             fs::create_dir_all(&album_dir)?;
         }
 
-        for photo in album.photos {
-            let path = opts.input.join(&photo.path);
+        for item in album.items {
+            let path = opts.input.join(&item.path);
             match path.extension().and_then(|x| x.to_str()) {
                 Some("jpg") => {
                     if opts.skip_photos {
@@ -166,8 +166,8 @@ fn process_albums<A: IntoIterator<Item = Album>>(opts: &Options, albums: A) -> R
             ))
             .map_err(|e| anyhow!("Failed to parse {}: {}", path.display(), e))?;
 
-            let description = photo.description.into_iter();
-            let comments = photo.comments.into_iter().filter_map(|c| {
+            let description = item.description.into_iter();
+            let comments = item.comments.into_iter().filter_map(|c| {
                 c.comment.as_ref().map(|comment| {
                     format!(
                         r#""{}" -{} ({})"#,
@@ -190,7 +190,7 @@ fn process_albums<A: IntoIterator<Item = Album>>(opts: &Options, albums: A) -> R
                         exif::Entry {
                             tag: rexif::ExifTag::DateTime as u16,
                             data: exif::EntryData::Ascii(
-                                photo.timestamp.format("%Y:%m:%d %H:%M:%S").to_string(),
+                                item.timestamp.format("%Y:%m:%d %H:%M:%S").to_string(),
                             ),
                         },
                     ],
@@ -198,14 +198,13 @@ fn process_albums<A: IntoIterator<Item = Album>>(opts: &Options, albums: A) -> R
                 }],
             };
 
-            trace!("Writing metadata for {}: {:#?}", photo.path.display(), exif);
+            trace!("Writing metadata for {}: {:#?}", item.path.display(), exif);
             let mut raw_exif = Cursor::new(Vec::new());
             exif.encode(&mut raw_exif).map_err(|e| anyhow!("{}", e))?;
             jpeg.set_exif(Some(raw_exif.into_inner()));
 
             let out_path = album_dir.join(
-                photo
-                    .path
+                item.path
                     .file_name()
                     .ok_or_else(|| anyhow!("missing filename"))?,
             );
