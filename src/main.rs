@@ -261,8 +261,18 @@ fn process_videos<V: IntoIterator<Item = Item>>(opts: &Options, videos: V) -> Re
     debug!("Processing videos");
 
     let out_path = opts.output.join("videos");
+    if !opts.dry_run {
+        fs::create_dir_all(&out_path)
+            .context(format!("create directory {}", out_path.display()))?;
+    }
+
     for video in videos {
-        process_item(&video, &out_path, opts)?;
+        process_item(
+            &video,
+            &PathBuf::from(out_path.file_name().context("file name")?),
+            opts,
+        )
+        .context("process item")?;
     }
 
     Ok(())
