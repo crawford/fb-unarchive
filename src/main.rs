@@ -240,12 +240,13 @@ fn process_mp4(item: &Item, dir: &Path, opts: &Options) -> Result<()> {
         return Ok(());
     }
 
+    let in_path = opts.input.join(&item.path);
     let out_path = dir.join(item.path.file_name().context("file name")?);
     let timestamp = Into::<SystemTime>::into(DateTime::<Utc>::from_utc(item.timestamp, Utc)).into();
 
-    fs::copy(&item.path, &out_path).context(format!(
+    fs::copy(&in_path, &out_path).context(format!(
         "copy {} to {}",
-        item.path.display(),
+        in_path.display(),
         out_path.display()
     ))?;
     filetime::set_file_handle_times(
@@ -282,12 +283,7 @@ fn process_videos<V: IntoIterator<Item = Item>>(opts: &Options, videos: V) -> Re
     }
 
     for video in videos {
-        process_item(
-            &video,
-            &PathBuf::from(out_path.file_name().context("file name")?),
-            opts,
-        )
-        .context("process item")?;
+        process_item(&video, &out_path, opts).context("process item")?;
     }
 
     Ok(())
