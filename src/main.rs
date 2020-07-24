@@ -79,7 +79,7 @@ struct Comment {
 }
 
 fn main() -> Result<()> {
-    let mut opts = Options::from_args();
+    let opts = Options::from_args();
 
     env_logger::Builder::from_default_env()
         .filter_level(match opts.verbosity {
@@ -96,11 +96,6 @@ fn main() -> Result<()> {
         structopt::clap::crate_name!(),
         structopt::clap::crate_version!()
     );
-
-    if !opts.skip_videos {
-        info!("Processing videos isn't implemented yet; skipping them");
-        opts.skip_videos = true;
-    }
 
     let albums = read_albums(&opts.input)?;
     trace!("Albums: {:#?}", albums);
