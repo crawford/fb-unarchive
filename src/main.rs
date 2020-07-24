@@ -97,13 +97,13 @@ fn main() -> Result<()> {
         structopt::clap::crate_version!()
     );
 
-    let albums = read_albums(&opts.input)?;
+    let albums = read_albums(&opts.input).context("read_albums")?;
     trace!("Albums: {:#?}", albums);
-    process_albums(&opts, albums)?;
+    process_albums(&opts, albums).context("process_albums")?;
 
-    let videos = read_videos(&opts.input)?;
+    let videos = read_videos(&opts.input).context("read_videos")?;
     trace!("Videos: {:#?}", videos);
-    process_videos(&opts, videos)?;
+    process_videos(&opts, videos).context("process_videos")?;
 
     Ok(())
 }
@@ -113,15 +113,18 @@ fn read_albums(root: &Path) -> Result<Vec<Album>> {
 
     let mut albums = Vec::new();
     let dir = root.join("photos_and_videos").join("album");
-    for entry in fs::read_dir(&dir).context(format!("Unable to list albums ({})", dir.display()))? {
-        let path = entry?.path();
+    for entry in fs::read_dir(&dir).context(format!("list directory {}", dir.display()))? {
+        let path = entry.context("entry")?.path();
         if path.extension().and_then(|x| x.to_str()) != Some("json") {
             trace!("Skipping {}", path.display());
             continue;
         }
 
         trace!("Adding {}", path.display());
-        let mut album: Album = serde_json::from_reader(&mut BufReader::new(File::open(path)?))?;
+        let mut album: Album = serde_json::from_reader(&mut BufReader::new(
+            File::open(&path).context(format!("open {}", path.display()))?,
+        ))
+        .context("parse json")?;
         for item in album.items.iter_mut() {
             item.path = root.join(&item.path);
         }
@@ -137,11 +140,12 @@ fn process_albums<A: IntoIterator<Item = Album>>(opts: &Options, albums: A) -> R
     for album in albums {
         let album_dir = opts.output.join(album.name);
         if !opts.dry_run {
-            fs::create_dir_all(&album_dir)?;
+            fs::create_dir_all(&album_dir)
+                .context(format!("create directory {}", &album_dir.display()))?;
         }
 
         for item in album.items {
-            process_item(&item, &album_dir, opts)?;
+            process_item(&item, &album_dir, opts).context("process item")?;
         }
     }
 
@@ -150,8 +154,9 @@ fn process_albums<A: IntoIterator<Item = Album>>(opts: &Options, albums: A) -> R
 
 fn process_item(item: &Item, out_dir: &Path, opts: &Options) -> Result<()> {
     match item.path.extension().and_then(|x| x.to_str()) {
-        Some("jpg") => process_jpeg(&item, out_dir, opts)?,
-        Some("mp4") => process_mp4(&item, out_dir, opts)?,
+        Some("jpg") => process_jpeg(&item, out_dir, opts).context("process jpeg")?,
+        Some("mp4") => process_video(&item, out_dir, opts).context("process video")?,
+        Some("flv") => process_video(&item, out_dir, opts).context("process video")?,
         Some(ext) => {
             warn!(
                 r#"Unrecognized file extension "{}"; skipping {}"#,
@@ -176,9 +181,10 @@ fn process_jpeg(item: &Item, dir: &Path, opts: &Options) -> Result<()> {
     }
 
     let mut jpeg = Jpeg::read(&mut BufReader::new(
-        File::open(&item.path).context(format!("Failed to open {}", item.path.display()))?,
+        File::open(&item.path).context(format!("open {}", item.path.display()))?,
     ))
-    .map_err(|e| anyhow!("Failed to parse {}: {}", item.path.display(), e))?;
+    .map_err(|e| anyhow!("Failed to parse {}: {}", item.path.display(), e))
+    .context("parse jpeg")?;
 
     let description = item.description.clone().into_iter();
     let comments = item.comments.iter().filter_map(|c| {
@@ -214,47 +220,58 @@ fn process_jpeg(item: &Item, dir: &Path, opts: &Options) -> Result<()> {
 
     trace!("Writing metadata for {}: {:#?}", item.path.display(), exif);
     let mut raw_exif = Cursor::new(Vec::new());
-    exif.encode(&mut raw_exif).map_err(|e| anyhow!("{}", e))?;
+    exif.encode(&mut raw_exif).context("exif encode")?;
     jpeg.set_exif(Some(raw_exif.into_inner()));
 
-    let out_path = dir.join(
-        item.path
-            .file_name()
-            .ok_or_else(|| anyhow!("missing filename"))?,
-    );
+    let out_path = dir.join(item.path.file_name().context("file name")?);
     if !opts.dry_run {
         trace!("Outputting {}", out_path.display());
-        jpeg.write_to(&mut BufWriter::new(File::create(out_path)?))?;
+        jpeg.write_to(&mut BufWriter::new(
+            File::create(&out_path).context("create")?,
+        ))
+        .context(format!("write file {}", out_path.display()))?;
     }
 
     Ok(())
 }
 
-fn process_mp4(item: &Item, dir: &Path, opts: &Options) -> Result<()> {
+fn process_video(item: &Item, dir: &Path, opts: &Options) -> Result<()> {
     if opts.skip_videos {
         trace!("Skipping video {}", item.path.display());
         return Ok(());
     }
 
+    let in_path = opts.input.join(&item.path);
     let out_path = dir.join(item.path.file_name().context("file name")?);
     let timestamp = Into::<SystemTime>::into(DateTime::<Utc>::from_utc(item.timestamp, Utc)).into();
 
-    fs::copy(&item.path, &out_path)?;
-    filetime::set_file_handle_times(&File::open(out_path)?, Some(timestamp), Some(timestamp))?;
+    fs::copy(&in_path, &out_path).context(format!(
+        "copy {} to {}",
+        in_path.display(),
+        out_path.display()
+    ))?;
+    filetime::set_file_handle_times(
+        &File::open(&out_path).context("open")?,
+        Some(timestamp),
+        Some(timestamp),
+    )
+    .context(format!("set times on {}", out_path.display()))?;
 
     Ok(())
 }
 
 fn read_videos(root: &Path) -> Result<Vec<Item>> {
-    let videos = &mut BufReader::new(File::open(
-        root.join("photos_and_videos").join("your_videos.json"),
-    )?);
+    let path = root.join("photos_and_videos").join("your_videos.json");
+    let videos =
+        &mut BufReader::new(File::open(&path).context(format!("open {}", path.display()))?);
 
     Ok(Vec::<Item>::deserialize(
-        serde_json::from_reader::<_, serde_json::Value>(videos)?
+        serde_json::from_reader::<_, serde_json::Value>(videos)
+            .context("parse json (videos)")?
             .get("videos")
             .context("videos")?,
-    )?)
+    )
+    .context("parse json")?)
 }
 
 fn process_videos<V: IntoIterator<Item = Item>>(opts: &Options, videos: V) -> Result<()> {
@@ -267,12 +284,7 @@ fn process_videos<V: IntoIterator<Item = Item>>(opts: &Options, videos: V) -> Re
     }
 
     for video in videos {
-        process_item(
-            &video,
-            &PathBuf::from(out_path.file_name().context("file name")?),
-            opts,
-        )
-        .context("process item")?;
+        process_item(&video, &out_path, opts).context("process item")?;
     }
 
     Ok(())
