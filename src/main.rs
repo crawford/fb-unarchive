@@ -13,13 +13,15 @@
 // limitations under the License.
 
 use anyhow::{anyhow, Context, Result};
-use chrono::naive::NaiveDateTime;
+use chrono::{naive::NaiveDateTime, offset::Utc, DateTime};
 use imagemeta::exif;
 use img_parts::{jpeg::Jpeg, ImageEXIF};
 use log::{debug, info, trace, warn, LevelFilter};
+use serde::Deserialize;
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Cursor};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 use structopt::StructOpt;
 
 #[derive(Debug, StructOpt)]
@@ -46,7 +48,7 @@ struct Options {
     verbosity: u8,
 }
 
-#[derive(serde::Deserialize, Debug)]
+#[derive(Deserialize, Debug)]
 struct Album {
     name: String,
     description: Option<String>,
@@ -54,7 +56,7 @@ struct Album {
     items: Vec<Item>,
 }
 
-#[derive(serde::Deserialize, Debug)]
+#[derive(Deserialize, Debug)]
 struct Item {
     #[serde(
         with = "chrono::naive::serde::ts_seconds",
@@ -68,7 +70,7 @@ struct Item {
     comments: Vec<Comment>,
 }
 
-#[derive(serde::Deserialize, Debug)]
+#[derive(Deserialize, Debug)]
 struct Comment {
     #[serde(with = "chrono::naive::serde::ts_seconds")]
     timestamp: NaiveDateTime,
@@ -102,8 +104,11 @@ fn main() -> Result<()> {
 
     let albums = read_albums(&opts.input)?;
     trace!("Albums: {:#?}", albums);
-
     process_albums(&opts, albums)?;
+
+    let videos = read_videos(&opts.input)?;
+    trace!("Videos: {:#?}", videos);
+    process_videos(&opts, videos)?;
 
     Ok(())
 }
@@ -141,22 +146,28 @@ fn process_albums<A: IntoIterator<Item = Album>>(opts: &Options, albums: A) -> R
         }
 
         for item in album.items {
-            match item.path.extension().and_then(|x| x.to_str()) {
-                Some("jpg") => process_jpeg(&item, &album_dir, opts)?,
-                Some("mp4") => process_mp4(&item, &album_dir, opts)?,
-                Some(ext) => {
-                    warn!(
-                        r#"Unrecognized file extension "{}"; skipping {}"#,
-                        ext,
-                        item.path.display()
-                    );
-                    continue;
-                }
-                None => {
-                    warn!(r"Missing file extension; skipping {}", item.path.display());
-                    continue;
-                }
-            }
+            process_item(&item, &album_dir, opts)?;
+        }
+    }
+
+    Ok(())
+}
+
+fn process_item(item: &Item, out_dir: &Path, opts: &Options) -> Result<()> {
+    match item.path.extension().and_then(|x| x.to_str()) {
+        Some("jpg") => process_jpeg(&item, out_dir, opts)?,
+        Some("mp4") => process_mp4(&item, out_dir, opts)?,
+        Some(ext) => {
+            warn!(
+                r#"Unrecognized file extension "{}"; skipping {}"#,
+                ext,
+                item.path.display()
+            );
+            return Ok(());
+        }
+        None => {
+            warn!(r"Missing file extension; skipping {}", item.path.display());
+            return Ok(());
         }
     }
 
@@ -224,10 +235,39 @@ fn process_jpeg(item: &Item, dir: &Path, opts: &Options) -> Result<()> {
     Ok(())
 }
 
-fn process_mp4(item: &Item, _dir: &Path, opts: &Options) -> Result<()> {
+fn process_mp4(item: &Item, dir: &Path, opts: &Options) -> Result<()> {
     if opts.skip_videos {
         trace!("Skipping video {}", item.path.display());
         return Ok(());
+    }
+
+    let out_path = dir.join(item.path.file_name().context("file name")?);
+    let timestamp = Into::<SystemTime>::into(DateTime::<Utc>::from_utc(item.timestamp, Utc)).into();
+
+    fs::copy(&item.path, &out_path)?;
+    filetime::set_file_handle_times(&File::open(out_path)?, Some(timestamp), Some(timestamp))?;
+
+    Ok(())
+}
+
+fn read_videos(root: &Path) -> Result<Vec<Item>> {
+    let videos = &mut BufReader::new(File::open(
+        root.join("photos_and_videos").join("your_videos.json"),
+    )?);
+
+    Ok(Vec::<Item>::deserialize(
+        serde_json::from_reader::<_, serde_json::Value>(videos)?
+            .get("videos")
+            .context("videos")?,
+    )?)
+}
+
+fn process_videos<V: IntoIterator<Item = Item>>(opts: &Options, videos: V) -> Result<()> {
+    debug!("Processing videos");
+
+    let out_path = opts.output.join("videos");
+    for video in videos {
+        process_item(&video, &out_path, opts)?;
     }
 
     Ok(())
