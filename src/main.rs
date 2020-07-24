@@ -155,7 +155,8 @@ fn process_albums<A: IntoIterator<Item = Album>>(opts: &Options, albums: A) -> R
 fn process_item(item: &Item, out_dir: &Path, opts: &Options) -> Result<()> {
     match item.path.extension().and_then(|x| x.to_str()) {
         Some("jpg") => process_jpeg(&item, out_dir, opts).context("process jpeg")?,
-        Some("mp4") => process_mp4(&item, out_dir, opts).context("process mp4")?,
+        Some("mp4") => process_video(&item, out_dir, opts).context("process video")?,
+        Some("flv") => process_video(&item, out_dir, opts).context("process video")?,
         Some(ext) => {
             warn!(
                 r#"Unrecognized file extension "{}"; skipping {}"#,
@@ -234,7 +235,7 @@ fn process_jpeg(item: &Item, dir: &Path, opts: &Options) -> Result<()> {
     Ok(())
 }
 
-fn process_mp4(item: &Item, dir: &Path, opts: &Options) -> Result<()> {
+fn process_video(item: &Item, dir: &Path, opts: &Options) -> Result<()> {
     if opts.skip_videos {
         trace!("Skipping video {}", item.path.display());
         return Ok(());
