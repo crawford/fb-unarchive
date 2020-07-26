@@ -204,8 +204,14 @@ fn process_jpeg(item: &Item, dir: &Path, opts: &Options) -> Result<()> {
             id: 0,
             entries: vec![
                 exif::Entry {
-                    tag: rexif::ExifTag::ImageDescription as u16,
+                    tag: rexif::ExifTag::UserComment as u16,
                     data: exif::EntryData::Ascii(combined),
+                },
+                exif::Entry {
+                    tag: rexif::ExifTag::DateTimeOriginal as u16,
+                    data: exif::EntryData::Ascii(
+                        item.timestamp.format("%Y:%m:%d %H:%M:%S").to_string(),
+                    ),
                 },
                 exif::Entry {
                     tag: rexif::ExifTag::DateTime as u16,
