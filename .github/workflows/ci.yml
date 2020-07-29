@@ -14,9 +14,9 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt
-      - uses: mbrobbel/rustfmt-check@master
+      - uses: actions-rs/cargo@v1
         with:
-          token: ${{secrets.GITHUB_TOKEN}}
+          command: fmt
 
   check:
     runs-on: ubuntu-latest
