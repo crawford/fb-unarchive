@@ -10,7 +10,7 @@ chrono = { version = "0.4.13", features = ["serde"] }
 env_logger = "0.7.1"
 filetime = "0.2.10"
 imagemeta = "0.1.0"
-img-parts = "0.1.1"
+img-parts = "0.2.1"
 log = "0.4.11"
 rexif = "0.5.0"
 serde = { version = "1.0.114", features = ["derive"] }

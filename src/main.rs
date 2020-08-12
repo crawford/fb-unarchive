@@ -19,7 +19,7 @@ use img_parts::{jpeg::Jpeg, ImageEXIF};
 use log::{debug, info, trace, warn, LevelFilter};
 use serde::Deserialize;
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter, Cursor};
+use std::io::{BufReader, Cursor};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use structopt::StructOpt;
@@ -180,11 +180,10 @@ fn process_jpeg(item: &Item, dir: &Path, opts: &Options) -> Result<()> {
         return Ok(());
     }
 
-    let mut jpeg = Jpeg::read(&mut BufReader::new(
-        File::open(&item.path).context(format!("open {}", item.path.display()))?,
-    ))
-    .map_err(|e| anyhow!("Failed to parse {}: {}", item.path.display(), e))
-    .context("parse jpeg")?;
+    let buf = fs::read(&item.path).context(format!("read {}", item.path.display()))?;
+    let mut jpeg = Jpeg::from_bytes(buf.into())
+        .map_err(|e| anyhow!("Failed to parse {}: {}", item.path.display(), e))
+        .context("parse jpeg")?;
 
     let description = item.description.clone().into_iter();
     let comments = item.comments.iter().filter_map(|c| {
@@ -227,15 +226,14 @@ fn process_jpeg(item: &Item, dir: &Path, opts: &Options) -> Result<()> {
     trace!("Writing metadata for {}: {:#?}", item.path.display(), exif);
     let mut raw_exif = Cursor::new(Vec::new());
     exif.encode(&mut raw_exif).context("exif encode")?;
-    jpeg.set_exif(Some(raw_exif.into_inner()));
+    jpeg.set_exif(Some(raw_exif.into_inner().into()));
 
     let out_path = dir.join(item.path.file_name().context("file name")?);
     if !opts.dry_run {
         trace!("Outputting {}", out_path.display());
-        jpeg.write_to(&mut BufWriter::new(
-            File::create(&out_path).context("create")?,
-        ))
-        .context(format!("write file {}", out_path.display()))?;
+        jpeg.encoder()
+            .write_to(File::create(&out_path).context("create")?)
+            .context(format!("write file {}", out_path.display()))?;
     }
 
     Ok(())
